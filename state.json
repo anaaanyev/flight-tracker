@@ -21,10 +21,6 @@
     }
   ],
   "threshold": 1000,
-  "last_slot": null,
-  "last_check": "2026-10-20 00:59 МСК",
-  "last_error_date": "2026-10-20",
   "last_heartbeat": "2026-10-20",
-  "last_report_month": "2026-10",
-  "tg_offset": 678677001
+  "last_report_month": "2026-10"
 }
