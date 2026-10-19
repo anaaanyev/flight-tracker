@@ -23,7 +23,11 @@ MAX_TRANSFERS = 1             # прямой рейс или 1 пересадк�
 SLOT_HOURS = (9, 19)          # время плановых проверок по Москве
 MAX_ROUTES = 8                # максимум маршрутов одновременно
 HEARTBEAT_DAYS = 25           # раз в ~25 дней коммит, чтобы GitHub не отключил cron
-DEFAULT_ROUTE = {"origin": "MOW", "dest": "BKK", "min_price": None, "min_info": None}
+DEFAULT_ROUTE = {
+    "origin": "MOW", "dest": "BKK",
+    "min_price": None, "min_info": None,              # самый дешёвый (до MAX_TRANSFERS пересадок)
+    "direct_min_price": None, "direct_min_info": None,  # самый дешёвый прямой рейс
+}
 DEFAULTS = {
     "routes": [DEFAULT_ROUTE],
     "threshold": 1000,        # на сколько рублей цена должна упасть (/threshold)
@@ -77,6 +81,9 @@ def load_state():
         loaded.pop("min_price", None)
         loaded.pop("min_info", None)
         state.update(loaded)
+    for r in state["routes"]:  # миграция: поля для прямых рейсов
+        r.setdefault("direct_min_price", None)
+        r.setdefault("direct_min_info", None)
     return state
 
 
@@ -94,7 +101,11 @@ def find_route(state, origin, dest):
 
 
 def new_route(origin, dest):
-    return {"origin": origin, "dest": dest, "min_price": None, "min_info": None}
+    return {
+        "origin": origin, "dest": dest,
+        "min_price": None, "min_info": None,
+        "direct_min_price": None, "direct_min_info": None,
+    }
 
 
 # ------------------------------ Telegram ---------------------------------
@@ -131,12 +142,13 @@ def parse_route_args(args):
 def routes_text(state):
     lines = []
     for r in state["routes"]:
-        mp = r["min_price"]
-        info = r["min_info"] or {}
-        lines.append(
-            f"• {r['origin']} → {r['dest']}: "
-            + (f"минимум {rub(mp)}, вылет {info.get('date')}" if mp else "минимум ещё не зафиксирован")
-        )
+        mp, dp = r["min_price"], r["direct_min_price"]
+        if mp:
+            text = (f"минимум {rub(mp)}, прямой "
+                    + (rub(dp) if dp else "—"))
+        else:
+            text = "минимум ещё не зафиксирован"
+        lines.append(f"• {r['origin']} → {r['dest']}: {text}")
     return "\n".join(lines) if lines else "маршрутов нет, добавьте: /add MOW BKK"
 
 
@@ -230,8 +242,9 @@ def months_in_window(start, end):
 
 
 def fetch_best(origin, dest, start, end):
-    """Самый дешёвый вариант в окне [start, end] с учётом лимита пересадок."""
-    best = None
+    """Два самых дешёвых варианта в окне [start, end]:
+    (до MAX_TRANSFERS пересадок включительно, только прямой рейс). Любой может быть None."""
+    best, direct = None, None
     for month in months_in_window(start, end):
         r = requests.get(
             "https://api.travelpayouts.com/aviasales/v3/prices_for_dates",
@@ -259,15 +272,45 @@ def fetch_best(origin, dest, start, end):
                 continue
             if o.get("transfers", 0) > MAX_TRANSFERS:
                 continue
-            if best is None or o["price"] < best["price"]:
-                best = {
-                    "price": int(o["price"]),
-                    "date": dep.isoformat(),
-                    "airline": o.get("airline", "?"),
-                    "transfers": o.get("transfers", 0),
-                    "link": "https://www.aviasales.ru" + o.get("link", ""),
-                }
-    return best
+            offer = {
+                "price": int(o["price"]),
+                "date": dep.isoformat(),
+                "airline": o.get("airline", "?"),
+                "transfers": o.get("transfers", 0),
+            }
+            if best is None or offer["price"] < best["price"]:
+                best = offer
+            if offer["transfers"] == 0 and (direct is None or offer["price"] < direct["price"]):
+                direct = offer
+    return best, direct
+
+
+def search_link(origin, dest, iso_date):
+    """Короткая ссылка на поиск Aviasales: MOW1111BKK1 = Москва, 11.11, Бангкок, 1 пассажир."""
+    d = date.fromisoformat(iso_date)
+    return f"https://www.aviasales.ru/search/{origin}{d:%d%m}{dest}1"
+
+
+def offer_text(route, label, offer, was=None):
+    d = date.fromisoformat(offer["date"])
+    line = f"{label}: {rub(offer['price'])}, вылет {d:%d.%m}, {offer['airline']}"
+    if offer["transfers"]:
+        line += f", пересадок: {offer['transfers']}"
+    if was is not None:
+        line += f" (было {rub(was)}, −{rub(was - offer['price'])})"
+    return line + "\n" + search_link(route["origin"], route["dest"], offer["date"])
+
+
+def offers_text(route, any_best, direct_best, was_any=None, was_direct=None):
+    """Блок «две цены»: самый дешёвый и самый дешёвый прямой (одним, если это один и тот же рейс)."""
+    if direct_best and (direct_best["price"], direct_best["date"]) == (any_best["price"], any_best["date"]):
+        return offer_text(route, "Самый дешёвый (прямой рейс)", any_best, was_any or was_direct)
+    parts = [offer_text(route, f"Самый дешёвый (до {MAX_TRANSFERS} пересадки)", any_best, was_any)]
+    if direct_best:
+        parts.append(offer_text(route, "Самый дешёвый прямой", direct_best, was_direct))
+    else:
+        parts.append("Прямых рейсов в этом окне нет")
+    return "\n".join(parts)
 
 
 def check_route(state, route, today, verbose):
@@ -275,7 +318,7 @@ def check_route(state, route, today, verbose):
     start = today + timedelta(days=WINDOW_DAYS[0])
     end = today + timedelta(days=WINDOW_DAYS[1])
     name = f"{route['origin']} → {route['dest']}"
-    best = fetch_best(route["origin"], route["dest"], start, end)
+    best, direct = fetch_best(route["origin"], route["dest"], start, end)
 
     if best is None:
         print(f"{name}: нет предложений в окне")
@@ -283,33 +326,41 @@ def check_route(state, route, today, verbose):
             say(f"{name}: предложений в окне вылета не найдено. Проверьте коды городов.")
         return None
 
-    old = route["min_price"]
-    details = (
-        f"{name}\n"
-        f"📅 вылет {best['date']}\n"
-        f"✈️ {best['airline']}, пересадок: {best['transfers']}\n"
-        f"{best['link']}"
-    )
-    # минимум записывается только после успешной отправки в Telegram:
-    # если сообщение не дошло, при следующей проверке оно будет отправлено снова
-    if old is None:
-        say(f"👀 Слежение запущено. Базовая цена: {rub(best['price'])}\n{details}")
-        route["min_price"] = best["price"]
-        route["min_info"] = best
-    elif old - best["price"] > state["threshold"]:
-        say(
-            f"🔥 Цена упала: {rub(best['price'])} "
-            f"(было {rub(old)}, −{rub(old - best['price'])})\n{details}\n"
-            "Цена из кэша Aviasales — проверьте на сайте перед покупкой."
+    thr = state["threshold"]
+    old_any, old_dir = route["min_price"], route["direct_min_price"]
+    # событие по каждой из двух цен: первая фиксация или падение больше порога
+    any_event = old_any is None or old_any - best["price"] > thr
+    dir_event = direct is not None and (old_dir is None or old_dir - direct["price"] > thr)
+    any_drop = old_any is not None and any_event
+    dir_drop = old_dir is not None and dir_event
+
+    if any_event or dir_event:
+        if any_drop or dir_drop:
+            title = "🔥 Цена упала"
+        elif old_any is None:
+            title = "👀 Слежение запущено (базовые цены)"
+        else:
+            title = "👀 Появился прямой рейс (базовая цена)"
+        text = f"{title}\n{name}\n" + offers_text(
+            route, best, direct,
+            was_any=old_any if any_drop else None,
+            was_direct=old_dir if dir_drop else None,
         )
-        route["min_price"] = best["price"]
-        route["min_info"] = best
+        if any_drop or dir_drop:
+            text += "\nЦены из кэша Aviasales — проверьте на сайте перед покупкой."
+        # минимумы записываются только после успешной отправки в Telegram:
+        # если сообщение не дошло, при следующей проверке оно будет отправлено снова
+        say(text)
+        if any_event:
+            route["min_price"], route["min_info"] = best["price"], best
+        if dir_event:
+            route["direct_min_price"], route["direct_min_info"] = direct["price"], direct
     else:
-        print(f"{name}: лучшая цена {best['price']}, минимум {old}, молчим")
+        print(f"{name}: {best['price']} (минимум {old_any}), прямой "
+              f"{direct['price'] if direct else '—'} (минимум {old_dir}) — молчим")
         if verbose:
-            say(f"{name}: снижения нет. Лучшая цена сейчас {rub(best['price'])} "
-                f"(минимум {rub(old)}).")
-    return best
+            say(f"{name}: снижения нет.\n" + offers_text(route, best, direct))
+    return {"any": best, "direct": direct}
 
 
 def run_checks(state, now, verbose):
@@ -338,10 +389,12 @@ def monthly_report(state, now, bests):
     lines = []
     for r in state["routes"]:
         cur = bests.get((r["origin"], r["dest"]))
-        mp = r["min_price"]
+        mp, dp = r["min_price"], r["direct_min_price"]
+        now_any = rub(cur["any"]["price"]) if cur else "нет данных"
+        now_dir = rub(cur["direct"]["price"]) if cur and cur["direct"] else "—"
         lines.append(
-            f"• {r['origin']} → {r['dest']}: минимум {rub(mp) if mp else '—'}, "
-            f"сейчас {rub(cur['price']) if cur else 'нет данных'}"
+            f"• {r['origin']} → {r['dest']}: минимум {rub(mp) if mp else '—'}, сейчас {now_any}; "
+            f"прямой: минимум {rub(dp) if dp else '—'}, сейчас {now_dir}"
         )
     say("📊 Ежемесячный отчёт: бот работает.\n" + "\n".join(lines))
     state["last_report_month"] = month
