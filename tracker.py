@@ -246,42 +246,46 @@ def fetch_best(origin, dest, start, end):
     (до MAX_TRANSFERS пересадок включительно, только прямой рейс). Любой может быть None."""
     best, direct = None, None
     for month in months_in_window(start, end):
-        r = requests.get(
-            "https://api.travelpayouts.com/aviasales/v3/prices_for_dates",
-            params={
-                "origin": origin,
-                "destination": dest,
-                "departure_at": month,
-                "one_way": "true",
-                "direct": "false",
-                "currency": "rub",
-                "market": "ru",
-                "sorting": "price",
-                "limit": 1000,
-            },
-            headers={"X-Access-Token": TP_TOKEN},
-            timeout=30,
-        )
-        r.raise_for_status()
-        payload = r.json()
-        if not payload.get("success", True):
-            raise RuntimeError(f"Aviasales API: {payload.get('error')}")
-        for o in payload.get("data", []):
-            dep = date.fromisoformat(o["departure_at"][:10])
-            if not (start <= dep <= end):
-                continue
-            if o.get("transfers", 0) > MAX_TRANSFERS:
-                continue
-            offer = {
-                "price": int(o["price"]),
-                "date": dep.isoformat(),
-                "airline": o.get("airline", "?"),
-                "transfers": o.get("transfers", 0),
-            }
-            if best is None or offer["price"] < best["price"]:
-                best = offer
-            if offer["transfers"] == 0 and (direct is None or offer["price"] < direct["price"]):
-                direct = offer
+        # API отдаёт один (самый дешёвый) билет на дату, поэтому прямые рейсы,
+        # которые дороже рейса с пересадкой на ту же дату, прячутся.
+        # Прямые запрашиваем отдельно (direct=true).
+        for only_direct in (False, True):
+            r = requests.get(
+                "https://api.travelpayouts.com/aviasales/v3/prices_for_dates",
+                params={
+                    "origin": origin,
+                    "destination": dest,
+                    "departure_at": month,
+                    "one_way": "true",
+                    "direct": "true" if only_direct else "false",
+                    "currency": "rub",
+                    "market": "ru",
+                    "sorting": "price",
+                    "limit": 1000,
+                },
+                headers={"X-Access-Token": TP_TOKEN},
+                timeout=30,
+            )
+            r.raise_for_status()
+            payload = r.json()
+            if not payload.get("success", True):
+                raise RuntimeError(f"Aviasales API: {payload.get('error')}")
+            for o in payload.get("data", []):
+                dep = date.fromisoformat(o["departure_at"][:10])
+                if not (start <= dep <= end):
+                    continue
+                if o.get("transfers", 0) > MAX_TRANSFERS:
+                    continue
+                offer = {
+                    "price": int(o["price"]),
+                    "date": dep.isoformat(),
+                    "airline": o.get("airline", "?"),
+                    "transfers": o.get("transfers", 0),
+                }
+                if best is None or offer["price"] < best["price"]:
+                    best = offer
+                if offer["transfers"] == 0 and (direct is None or offer["price"] < direct["price"]):
+                    direct = offer
     return best, direct
 
 
@@ -309,7 +313,7 @@ def offers_text(route, any_best, direct_best, was_any=None, was_direct=None):
     if direct_best:
         parts.append(offer_text(route, "Самый дешёвый прямой", direct_best, was_direct))
     else:
-        parts.append("Прямых рейсов в этом окне нет")
+        parts.append("Прямых рейсов в данных Aviasales на эти даты не нашлось")
     return "\n".join(parts)
 
 
