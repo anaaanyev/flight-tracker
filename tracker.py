@@ -285,18 +285,20 @@ def check_route(state, route, today, verbose):
         f"✈️ {best['airline']}, пересадок: {best['transfers']}\n"
         f"{best['link']}"
     )
+    # минимум записывается только после успешной отправки в Telegram:
+    # если сообщение не дошло, при следующей проверке оно будет отправлено снова
     if old is None:
-        route["min_price"] = best["price"]
-        route["min_info"] = best
         say(f"👀 Слежение запущено. Базовая цена: {rub(best['price'])}\n{details}")
-    elif old - best["price"] > state["threshold"]:
         route["min_price"] = best["price"]
         route["min_info"] = best
+    elif old - best["price"] > state["threshold"]:
         say(
             f"🔥 Цена упала: {rub(best['price'])} "
             f"(было {rub(old)}, −{rub(old - best['price'])})\n{details}\n"
             "Цена из кэша Aviasales — проверьте на сайте перед покупкой."
         )
+        route["min_price"] = best["price"]
+        route["min_info"] = best
     else:
         print(f"{name}: лучшая цена {best['price']}, минимум {old}, молчим")
         if verbose:
