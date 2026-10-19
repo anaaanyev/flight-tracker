@@ -102,7 +102,12 @@ def tg(method, **params):
     r = requests.post(
         f"https://api.telegram.org/bot{TG_TOKEN}/{method}", json=params, timeout=20
     )
-    r.raise_for_status()
+    if not r.ok:  # показываем причину от Telegram (и не выводим токен из адреса)
+        try:
+            desc = r.json().get("description", "")
+        except ValueError:
+            desc = ""
+        raise RuntimeError(f"Telegram {method}: HTTP {r.status_code} {desc}")
     return r.json()["result"]
 
 
