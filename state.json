@@ -3,20 +3,14 @@
     {
       "origin": "MOW",
       "dest": "BKK",
-      "min_price": 25588,
-      "min_info": {
-        "price": 25588,
-        "date": "2026-11-11",
-        "airline": "HU",
-        "transfers": 1,
-        "link": "https://www.aviasales.ru/search/MOW1111BKK1?t=HU17943999001794507900001560SVOHAKBKK_de1d4312ef1abf73c1bbadc73bc4de74_25589&search_date=19102026&expected_price_uuid=01a1560c-1b3f-8031-29c9-ea7c9e1d58a4&static_fare_key=TY%7CP1%7CH1%7CL1_1_23%7CCH1%7CR1%7CTBC1&itinerary_key=oXGmE11IqtB41PliUN28kQ&expected_price_source=share&expected_price_currency=rub&expected_price=25588"
-      }
+      "min_price": null,
+      "min_info": null
     }
   ],
   "threshold": 1000,
   "last_slot": null,
   "last_check": "2026-10-20 00:26 МСК",
-  "last_error_date": "2026-10-20",
+  "last_error_date": null,
   "last_heartbeat": "2026-10-20",
   "last_report_month": null,
   "tg_offset": 0
