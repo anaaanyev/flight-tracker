@@ -3,15 +3,18 @@
 
 Запускается GitHub Actions каждые 15 минут:
   * каждый запуск разбирает команды из Telegram (/add, /set, /status, ...);
-  * сами цены проверяются 2 раза в день (09:00 и 19:00 по Москве) или по команде /check.
+  * сами цены проверяются 1 раз в сутки (около 09:00 по Москве) или по команде /check.
 Уведомление приходит только если цена по маршруту упала ниже сохранённого минимума
 больше чем на порог (по умолчанию 1000 руб).
 Раз в месяц приходит короткий отчёт, чтобы было видно, что бот жив.
+state.json меняется (и коммитится) только при реальных событиях: новая цена, смена
+маршрута/порога, ежемесячный отчёт, редкий служебный «пульс».
 """
 import copy
 import json
 import os
 import re
+import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,8 +23,8 @@ import requests
 # ----------------------------- настройки ---------------------------------
 WINDOW_DAYS = (15, 45)        # окно вылета: от сегодня+15 до сегодня+45
 MAX_TRANSFERS = 1             # прямой рейс или 1 пересадка
-SLOT_HOURS = (9, 19)          # время плановых проверок по Москве
-MAX_ROUTES = 8                # максимум маршрутов одновременно
+HTTP_RETRIES = 3              # повторы запроса к Aviasales при сбое сети/сервера
+MAX_ROUTES = 8               # максимум маршрутов одновременно
 HEARTBEAT_DAYS = 25           # раз в ~25 дней коммит, чтобы GitHub не отключил cron
 DEFAULT_ROUTE = {
     "origin": "MOW", "dest": "BKK",
@@ -31,13 +34,10 @@ DEFAULT_ROUTE = {
 DEFAULTS = {
     "routes": [DEFAULT_ROUTE],
     "threshold": 1000,        # на сколько рублей цена должна упасть (/threshold)
-    "last_slot": None,
-    "last_check": None,
-    "last_error_date": None,
     "last_heartbeat": None,
     "last_report_month": None,
-    "tg_offset": 0,
 }
+OBSOLETE_KEYS = ("last_slot", "last_check", "last_error_date", "tg_offset")  # старые поля
 # -------------------------------------------------------------------------
 
 MSK = timezone(timedelta(hours=3))
@@ -46,7 +46,8 @@ STATE_FILE = Path(__file__).with_name("state.json")
 TG_TOKEN = os.environ["TG_TOKEN"]
 TG_CHAT = str(os.environ["TG_CHAT_ID"])
 TP_TOKEN = os.environ["TP_TOKEN"]
-FORCE_ENV = os.environ.get("FORCE_CHECK") == "1"
+FORCE_ENV = os.environ.get("FORCE_CHECK") == "1"   # ручной запуск из GitHub: ответить подробно
+DAILY_ENV = os.environ.get("DAILY_CHECK") == "1"   # ежедневный запуск по расписанию
 
 IATA = re.compile(r"[A-Za-z]{3}")
 
@@ -81,6 +82,8 @@ def load_state():
         loaded.pop("min_price", None)
         loaded.pop("min_info", None)
         state.update(loaded)
+    for k in OBSOLETE_KEYS:  # эти поля больше не хранятся: так меньше коммитов
+        state.pop(k, None)
     for r in state["routes"]:  # миграция: поля для прямых рейсов
         r.setdefault("direct_min_price", None)
         r.setdefault("direct_min_info", None)
@@ -155,14 +158,12 @@ def routes_text(state):
 def process_commands(state):
     """Читает команды из Telegram. Возвращает True, если нужна внеплановая проверка."""
     force = False
-    updates = tg(
-        "getUpdates",
-        offset=state["tg_offset"],
-        timeout=0,
-        allowed_updates=["message"],
-    )
+    updates = tg("getUpdates", timeout=0, allowed_updates=["message"])
+    if updates:
+        # подтверждаем получение сразу: Telegram удалит эти сообщения и не отдаст их снова,
+        # поэтому номер последнего сообщения хранить в state.json не нужно
+        tg("getUpdates", offset=updates[-1]["update_id"] + 1, limit=1, timeout=0)
     for u in updates:
-        state["tg_offset"] = u["update_id"] + 1
         msg = u.get("message") or {}
         if str(msg.get("chat", {}).get("id")) != TG_CHAT:
             continue  # игнорируем чужих
@@ -219,7 +220,7 @@ def process_commands(state):
                 f"пересадок не более {MAX_TRANSFERS}\n"
                 f"Порог: {rub(state['threshold'])}\n"
                 f"Маршруты:\n{routes_text(state)}\n"
-                f"Последняя проверка: {state['last_check'] or '—'}"
+                "Цены проверяются раз в сутки около 09:00 МСК или по /check."
             )
 
         elif cmd == "/check":
@@ -232,6 +233,19 @@ def process_commands(state):
 
 
 # ------------------------------ Aviasales --------------------------------
+def http_get(url, **kwargs):
+    """GET с повторами: разовый сбой Aviasales не должен стоить пропущенной проверки."""
+    for attempt in range(1, HTTP_RETRIES + 1):
+        try:
+            r = requests.get(url, **kwargs)
+            r.raise_for_status()
+            return r
+        except requests.RequestException:
+            if attempt == HTTP_RETRIES:
+                raise
+            time.sleep(10 * attempt)
+
+
 def months_in_window(start, end):
     m = date(start.year, start.month, 1)
     out = []
@@ -250,7 +264,7 @@ def fetch_best(origin, dest, start, end):
         # которые дороже рейса с пересадкой на ту же дату, прячутся.
         # Прямые запрашиваем отдельно (direct=true).
         for only_direct in (False, True):
-            r = requests.get(
+            r = http_get(
                 "https://api.travelpayouts.com/aviasales/v3/prices_for_dates",
                 params={
                     "origin": origin,
@@ -405,46 +419,36 @@ def monthly_report(state, now, bests):
 
 
 # -------------------------------- main -----------------------------------
-def current_slot(now):
-    """Последний плановый слот, который уже наступил сегодня (или None)."""
-    passed = [h for h in SLOT_HOURS if now.hour >= h]
-    return f"{now.date().isoformat()}-{max(passed):02d}" if passed else None
-
-
-def report_error(state, now, err):
+def report_error(err):
+    """Ошибка проверки цен (бывает раз в сутки или по ручному запуску, так что не спамит)."""
     print("ERROR:", err)
-    today = now.date().isoformat()
-    if state["last_error_date"] != today:  # не чаще раза в сутки
-        state["last_error_date"] = today
-        try:
-            say(f"⚠️ Ошибка трекера: {err}")
-        except Exception as e:  # noqa: BLE001
-            print("Не удалось отправить ошибку в Telegram:", e)
+    try:
+        say(f"⚠️ Ошибка трекера: {err}")
+    except Exception as e:  # noqa: BLE001
+        print("Не удалось отправить ошибку в Telegram:", e)
 
 
 def main():
     now = datetime.now(MSK)
     state = load_state()
 
-    force = FORCE_ENV
+    cmd_force = False
     try:
-        force = process_commands(state) or force
+        cmd_force = process_commands(state)
     except Exception as e:  # noqa: BLE001
-        report_error(state, now, f"Telegram: {e}")
+        # запуск идёт каждые 15 минут, поэтому в Telegram об этом не пишем, только в лог
+        print("ERROR: Telegram:", e)
 
-    slot = current_slot(now)
-    if force or (slot and slot != state["last_slot"]):
+    manual = cmd_force or FORCE_ENV  # ручная проверка: отвечаем по каждому маршруту
+    if manual or DAILY_ENV:
         try:
-            bests, errors = run_checks(state, now, verbose=force)
+            bests, errors = run_checks(state, now, verbose=manual)
             if errors:
-                report_error(state, now, "; ".join(errors))
-            elif slot:
-                state["last_slot"] = slot  # при ошибке слот не отмечается: повтор через 15 минут
-            state["last_check"] = now.strftime("%Y-%m-%d %H:%M МСК")
-            if not errors:
+                report_error("; ".join(errors))
+            else:
                 monthly_report(state, now, bests)
         except Exception as e:  # noqa: BLE001
-            report_error(state, now, e)
+            report_error(e)
 
     # «пульс», чтобы GitHub не отключил расписание в неактивном репозитории
     hb = state["last_heartbeat"]

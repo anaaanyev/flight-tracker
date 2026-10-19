@@ -2,7 +2,8 @@ name: flight-tracker
 
 on:
   schedule:
-    - cron: "*/15 * * * *"   # раз в 15 минут: разбор команд Telegram + плановые проверки цен
+    - cron: "*/15 * * * *"   # раз в 15 минут: только разбор команд Telegram
+    - cron: "7 6 * * *"      # раз в сутки, 09:07 по Москве (06:07 UTC): проверка цен
   workflow_dispatch:
     inputs:
       force_check:
@@ -20,7 +21,7 @@ concurrency:
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,14 +40,21 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TP_TOKEN: ${{ secrets.TP_TOKEN }}
           FORCE_CHECK: ${{ github.event_name == 'workflow_dispatch' && inputs.force_check && '1' || '0' }}
+          DAILY_CHECK: ${{ github.event_name == 'schedule' && github.event.schedule == '7 6 * * *' && '1' || '0' }}
         run: python tracker.py
 
       - name: Save state
         run: |
+          # коммит только если state.json реально изменился
           if [ -n "$(git status --porcelain state.json)" ]; then
             git config user.name "flight-tracker-bot"
             git config user.email "bot@users.noreply.github.com"
             git add state.json
             git commit -m "state update"
-            git push
+            ok=0
+            for i in 1 2 3; do
+              if git pull --rebase -X theirs origin main && git push; then ok=1; break; fi
+              sleep 5
+            done
+            [ "$ok" = 1 ]   # если за 3 попытки не вышло, шаг станет красным
           fi
