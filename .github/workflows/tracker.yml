@@ -5,11 +5,16 @@ on:
     - cron: "*/15 * * * *"   # раз в 15 минут: только разбор команд Telegram
     - cron: "7 6 * * *"      # раз в сутки, 09:07 по Москве (06:07 UTC): проверка цен
   workflow_dispatch:
+    # без параметров (так запускает cron-job.org каждые 5 минут) бот только читает команды из Telegram
     inputs:
       force_check:
-        description: "Проверить цены прямо сейчас"
+        description: "Полная проверка цен сейчас (как /check, может прислать уведомление)"
         type: boolean
-        default: true
+        default: false
+      daily_check:
+        description: "Ежедневная проверка (как по расписанию)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -40,7 +45,7 @@ jobs:
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
           TP_TOKEN: ${{ secrets.TP_TOKEN }}
           FORCE_CHECK: ${{ github.event_name == 'workflow_dispatch' && inputs.force_check && '1' || '0' }}
-          DAILY_CHECK: ${{ github.event_name == 'schedule' && github.event.schedule == '7 6 * * *' && '1' || '0' }}
+          DAILY_CHECK: ${{ ((github.event_name == 'schedule' && github.event.schedule == '7 6 * * *') || (github.event_name == 'workflow_dispatch' && inputs.daily_check)) && '1' || '0' }}
         run: python tracker.py
 
       - name: Save state
