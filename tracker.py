@@ -59,7 +59,9 @@ HELP = (
     "/routes — список маршрутов\n"
     "/threshold 1500 — порог падения цены в рублях\n"
     "/status — настройки и минимальные цены\n"
-    "/check — проверить цены прямо сейчас\n"
+    "/prices — текущие цены по всем маршрутам (ничего не сохраняет)\n"
+    "/prices LED HKT — цены по любому маршруту, без добавления в слежение\n"
+    "/check — проверить цены сейчас (может обновить сохранённый минимум)\n"
     "Коды — IATA города или аэропорта (MOW, LED, KZN, BKK, HKT, DXB…).\n"
     "Команды обрабатываются раз в ~15 минут."
 )
@@ -220,8 +222,22 @@ def process_commands(state):
                 f"пересадок не более {MAX_TRANSFERS}\n"
                 f"Порог: {rub(state['threshold'])}\n"
                 f"Маршруты:\n{routes_text(state)}\n"
-                "Цены проверяются раз в сутки около 09:00 МСК или по /check."
+                "Цены проверяются раз в сутки около 09:00 МСК. Посмотреть цены сейчас: /prices."
             )
+
+        elif cmd == "/prices":
+            if args:
+                pair = parse_route_args(args)
+                if not pair:
+                    say("Формат: /prices (все маршруты) или /prices LED HKT (один любой маршрут)")
+                    continue
+                routes = [new_route(*pair)]  # разовый запрос: в слежение не добавляется
+            else:
+                routes = state["routes"]
+            if routes:
+                show_prices(routes, datetime.now(MSK).date())
+            else:
+                say("Маршрутов нет. Добавьте: /add MOW BKK или запросите разово: /prices MOW BKK")
 
         elif cmd == "/check":
             force = True
@@ -331,6 +347,47 @@ def offers_text(route, any_best, direct_best, was_any=None, was_direct=None):
     return "\n".join(parts)
 
 
+def show_prices(routes, today):
+    """Показывает текущие цены. Ничего не сохраняет: сохранённые минимумы не трогает."""
+    start = today + timedelta(days=WINDOW_DAYS[0])
+    end = today + timedelta(days=WINDOW_DAYS[1])
+    for route in routes:
+        name = f"{route['origin']} → {route['dest']}"
+        try:
+            best, direct = fetch_best(route["origin"], route["dest"], start, end)
+        except Exception as e:  # noqa: BLE001
+            say(f"{name}: не удалось получить цены ({e})")
+            continue
+        if best is None:
+            say(f"{name}: предложений в окне вылета не найдено. Проверьте коды городов.")
+            continue
+        say(
+            f"💰 Цены сейчас\n{name}\n" + offers_text(route, best, direct)
+            + "\nЦены из кэша Aviasales — проверьте на сайте перед покупкой."
+        )
+
+
+def minimum_expired(price, info, start):
+    """Дата вылета сохранённого минимума вышла из окна поиска (ближе, чем через WINDOW_DAYS[0] дней)
+    или прошла: такой билет бот уже не найдёт, сравнивать с ним бессмысленно."""
+    if price is None or not info or not info.get("date"):
+        return False
+    return date.fromisoformat(info["date"]) < start
+
+
+def refresh_expired_minimums(route, best, direct, start):
+    """Тихо заменяет устаревшие минимумы текущими ценами (без уведомления: падения тут нет)."""
+    name = f"{route['origin']} → {route['dest']}"
+    if minimum_expired(route["min_price"], route["min_info"], start):
+        print(f"{name}: минимум {route['min_price']} устарел (дата вылета вне окна), новый: {best['price']}")
+        route["min_price"], route["min_info"] = best["price"], best
+    if minimum_expired(route["direct_min_price"], route["direct_min_info"], start):
+        print(f"{name}: минимум прямого {route['direct_min_price']} устарел, "
+              f"новый: {direct['price'] if direct else '—'}")
+        route["direct_min_price"] = direct["price"] if direct else None
+        route["direct_min_info"] = direct
+
+
 def check_route(state, route, today, verbose):
     """Проверяет один маршрут. Возвращает лучшую найденную цену (или None)."""
     start = today + timedelta(days=WINDOW_DAYS[0])
@@ -344,6 +401,7 @@ def check_route(state, route, today, verbose):
             say(f"{name}: предложений в окне вылета не найдено. Проверьте коды городов.")
         return None
 
+    refresh_expired_minimums(route, best, direct, start)
     thr = state["threshold"]
     old_any, old_dir = route["min_price"], route["direct_min_price"]
     # событие по каждой из двух цен: первая фиксация или падение больше порога
