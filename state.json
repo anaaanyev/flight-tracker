@@ -22,8 +22,13 @@
     {
       "origin": "MOW",
       "dest": "DAD",
-      "min_price": null,
-      "min_info": null,
+      "min_price": 39479,
+      "min_info": {
+        "price": 39479,
+        "date": "2026-11-10",
+        "airline": "SU",
+        "transfers": 1
+      },
       "direct_min_price": null,
       "direct_min_info": null
     }
