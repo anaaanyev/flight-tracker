@@ -11,10 +11,10 @@
         "transfers": 1,
         "link": "https://www.aviasales.ru/search/MOW2911BKK1?t=HU17959617001796063100001450SVOHAKBKK_4d10a1080ccd437641ab16709df214e0_25589&search_date=19102026&expected_price_uuid=01a15609-3c0a-8030-ad5c-bb7fa21feddd&static_fare_key=TY%7CP1%7CH1%7CL1_1_23%7CCH1%7CR1%7CTBC1&itinerary_key=nNMeBzAhaYq-X8Wk7MW4UA&expected_price_source=share&expected_price_currency=rub&expected_price=25588"
       },
-      "direct_min_price": 37371,
+      "direct_min_price": 33499,
       "direct_min_info": {
-        "price": 37371,
-        "date": "2026-11-24",
+        "price": 33499,
+        "date": "2026-11-23",
         "airline": "SU",
         "transfers": 0
       }
