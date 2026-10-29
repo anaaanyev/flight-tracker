@@ -3,11 +3,11 @@
     {
       "origin": "MOW",
       "dest": "BKK",
-      "min_price": 24421,
+      "min_price": 23350,
       "min_info": {
-        "price": 24421,
-        "date": "2026-11-25",
-        "airline": "HU",
+        "price": 23350,
+        "date": "2026-11-17",
+        "airline": "GS",
         "transfers": 1
       },
       "direct_min_price": 33499,
