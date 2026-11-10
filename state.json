@@ -10,10 +10,10 @@
         "airline": "GS",
         "transfers": 1
       },
-      "direct_min_price": 38044,
+      "direct_min_price": 36804,
       "direct_min_info": {
-        "price": 38044,
-        "date": "2026-12-01",
+        "price": 36804,
+        "date": "2026-11-25",
         "airline": "SU",
         "transfers": 0
       }
