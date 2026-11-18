@@ -10,10 +10,10 @@
         "airline": "CZ",
         "transfers": 1
       },
-      "direct_min_price": 37177,
+      "direct_min_price": 36134,
       "direct_min_info": {
-        "price": 37177,
-        "date": "2026-12-20",
+        "price": 36134,
+        "date": "2026-12-09",
         "airline": "SU",
         "transfers": 0
       }
