@@ -3,11 +3,11 @@
     {
       "origin": "MOW",
       "dest": "BKK",
-      "min_price": 24854,
+      "min_price": 24860,
       "min_info": {
-        "price": 24854,
-        "date": "2026-12-08",
-        "airline": "CZ",
+        "price": 24860,
+        "date": "2026-12-09",
+        "airline": "HU",
         "transfers": 1
       },
       "direct_min_price": 36134,
