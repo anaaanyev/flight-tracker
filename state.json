@@ -3,17 +3,17 @@
     {
       "origin": "MOW",
       "dest": "BKK",
-      "min_price": 24860,
+      "min_price": 25724,
       "min_info": {
-        "price": 24860,
-        "date": "2026-12-09",
-        "airline": "HU",
+        "price": 25724,
+        "date": "2027-01-09",
+        "airline": "CZ",
         "transfers": 1
       },
-      "direct_min_price": 36134,
+      "direct_min_price": 36963,
       "direct_min_info": {
-        "price": 36134,
-        "date": "2026-12-09",
+        "price": 36963,
+        "date": "2026-12-10",
         "airline": "SU",
         "transfers": 0
       }
